@@ -1,0 +1,65 @@
+#!/usr/bin/env perl
+
+use Mojolicious::Lite;
+use Data::Dumper;
+
+my $clients = {};
+
+helper 'send_to_all' => sub {
+    my ( $self, $message ) = @_;
+    $_->send($message) for values %$clients;
+};
+
+helper 'add_client' => sub {
+    my ( $self, $username ) = @_;
+    $clients->{$username} = $self;
+};
+
+helper 'remove_client' => sub {
+    my ( $self, $username ) = @_;
+    delete $clients->{$username};
+};
+app->secrets( ["aaaaaaaaaaaaaa"] );
+
+any '/login' => sub {
+    my $self   = shift;
+    my $params = $self->req->json;
+    app->log->debug(Dumper $params);
+    if ( my $username = $params->{'username'} ) {
+        $self->session(
+            'username' => $username,
+            'email'    => $params->{'email'}
+        );
+    }
+
+    return $self->render(json => {ok => 1});
+};
+
+websocket '/ws' => sub {
+    my $self = shift;
+    Mojo::IOLoop->stream( $self->tx->connection )->timeout(1200);
+
+    my $username = $self->session('username');
+    $self->add_client($username);
+    $self->on(
+        message => sub {
+            my ( $self, $text ) = @_;
+            $self->send_to_all($text);
+        }
+    );
+
+    $self->on(
+        finish => sub {
+            my $self = shift;
+            $self->remove_client($username);
+        }
+    );
+};
+
+get '/' => sub {
+    my $self = shift;
+
+    return $self->render( template => 'index' );
+};
+
+app->start;
